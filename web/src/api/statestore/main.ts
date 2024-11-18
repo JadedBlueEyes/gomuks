@@ -53,6 +53,34 @@ export interface RoomListEntry {
 	marked_unread: boolean
 }
 
+export interface GCSettings {
+	interval: number,
+	lastOpenedCutoff: number
+	timelineHardLimit: number
+	visibleTimelineLimit: number
+	secondaryTimelineLimit: number
+	secondaryTimelineLimitMinTimeSinceOpened: number
+	secondaryTimelineLimitSortingAge: number
+}
+
+window.gcSettings ??= {
+	// Run garbage collection every 15 minutes.
+	interval: 15 * 60 * 1000,
+	// Run garbage collection to rooms not opened in the past 10 minutes.
+	lastOpenedCutoff: 10 * 60 * 1000,
+	// Never allow more than 1000 timeline events in a room.
+	timelineHardLimit: 1000,
+	// By default, keep enough events in the room to fill the screen plus 5.
+	// The average event size is arbitrarily guessed to be 32px.
+	get visibleTimelineLimit() { return Math.ceil(window.innerHeight / 32) + 5 },
+	// When certain conditions below are met, only keep 5 visible events in the room.
+	secondaryTimelineLimit: 5,
+	// First condition: the room was last opened over an hour ago.
+	secondaryTimelineLimitMinTimeSinceOpened: 60 * 60 * 1000,
+	// Second condition: the sorting timestamp of the room is over 8 hours ago.
+	secondaryTimelineLimitSortingAge: 8 * 60 * 60 * 1000,
+}
+
 export class StateStore {
 	readonly rooms: Map<RoomID, RoomStateStore> = new Map()
 	readonly roomList = new NonNullCachedEventDispatcher<RoomListEntry[]>([])
@@ -358,5 +386,22 @@ export class StateStore {
 				this.roomList.emit(updatedRoomList)
 			}
 		}
+	}
+
+	doGarbageCollection() {
+		const maxLastOpened = Date.now() - window.gcSettings.lastOpenedCutoff
+		let deletedTimelineRows = 0
+		let deletedEvents = 0
+		let deletedState = 0
+		for (const room of this.rooms.values()) {
+			if (room.roomID === this.activeRoomID || room.lastOpened > maxLastOpened) {
+				continue
+			}
+			const [dt, de, ds] = room.doGarbageCollection()
+			deletedTimelineRows += dt
+			deletedEvents += de
+			deletedState += ds
+		}
+		return { deletedTimelineRows, deletedEvents, deletedState } as const
 	}
 }

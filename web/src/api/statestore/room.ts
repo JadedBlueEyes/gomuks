@@ -80,6 +80,12 @@ export interface AutocompleteMemberEntry {
 	searchString: string
 }
 
+// TODO move this somewhere where it's less likely to be forgotten
+const supportedEventTypes = new Set([
+	"m.room.message", "m.sticker", "m.room.encrypted", "m.room.member",
+	"m.room.server_acl", "m.room.pinned_events", "m.room.power_levels",
+])
+
 export class RoomStateStore {
 	readonly roomID: RoomID
 	readonly meta: NonNullCachedEventDispatcher<DBRoom>
@@ -98,7 +104,7 @@ export class RoomStateStore {
 	readonly accountData: Map<string, UnknownEventContent> = new Map()
 	readonly accountDataSubs = new MultiSubscribable()
 	readonly openNotifications: Map<EventRowID, Notification> = new Map()
-	readonly emojiPacks: Map<string, CustomEmojiPack | null> = new Map()
+	readonly #emojiPacksCache: Map<string, CustomEmojiPack | null> = new Map()
 	readonly preferences: Preferences
 	readonly localPreferenceCache: Preferences
 	readonly preferenceSub = new NoDataSubscribable()
@@ -107,6 +113,7 @@ export class RoomStateStore {
 	#autocompleteMembersCache: AutocompleteMemberEntry[] | null = null
 	membersRequested: boolean = false
 	#allPacksCache: Record<string, CustomEmojiPack> | null = null
+	lastOpened: number = 0
 	readonly pendingEvents: EventRowID[] = []
 	paginating = false
 	paginationRequestedForRow = -1
@@ -146,10 +153,10 @@ export class RoomStateStore {
 	}
 
 	getEmojiPack(key: string): CustomEmojiPack | null {
-		if (!this.emojiPacks.has(key)) {
+		if (!this.#emojiPacksCache.has(key)) {
 			const pack = this.getStateEvent("im.ponies.room_emotes", key)?.content
 			if (!pack || !pack.images) {
-				this.emojiPacks.set(key, null)
+				this.#emojiPacksCache.set(key, null)
 				return null
 			}
 			const fallbackName = key === ""
@@ -159,9 +166,9 @@ export class RoomStateStore {
 				type: "im.ponies.room_emotes",
 				state_key: key,
 			})
-			this.emojiPacks.set(key, parseCustomEmojiPack(pack as ImagePack, packID, fallbackName))
+			this.#emojiPacksCache.set(key, parseCustomEmojiPack(pack as ImagePack, packID, fallbackName))
 		}
-		return this.emojiPacks.get(key) ?? null
+		return this.#emojiPacksCache.get(key) ?? null
 	}
 
 	getAllEmojiPacks(): Record<string, CustomEmojiPack> {
@@ -303,7 +310,7 @@ export class RoomStateStore {
 
 	invalidateStateCaches(evtType: string, key: string) {
 		if (evtType === "im.ponies.room_emotes") {
-			this.emojiPacks.delete(key)
+			this.#emojiPacksCache.delete(key)
 			this.#allPacksCache = null
 			this.parent.invalidateEmojiPacksCache()
 		} else if (evtType === "m.room.member") {
@@ -390,7 +397,7 @@ export class RoomStateStore {
 			}
 			stateMap.set(evt.state_key, evt.rowid)
 		}
-		this.emojiPacks.clear()
+		this.#emojiPacksCache.clear()
 		this.#allPacksCache = null
 		if (omitMembers) {
 			newStateMap.set("m.room.member", this.state.get("m.room.member") ?? new Map())
@@ -424,5 +431,99 @@ export class RoomStateStore {
 		if (decrypted.preview_event_rowid) {
 			this.meta.current.preview_event_rowid = decrypted.preview_event_rowid
 		}
+	}
+
+	doGarbageCollection() {
+
+		const showHiddenEvents = this.preferences.show_hidden_events
+		const showMemberEvents = this.preferences.show_hidden_events
+		const showRedactedEvents = this.preferences.show_redacted_events
+		const isVisibleEvent = (evt: MemDBEvent) => {
+			if (evt.type === "m.room.member") {
+				return showMemberEvents
+			} else if (evt.relation_type === "m.replace" || !supportedEventTypes.has(evt.type)) {
+				return showHiddenEvents
+			} else if (evt.redacted_by) {
+				return showRedactedEvents
+			} else {
+				return true
+			}
+		}
+
+		const memberEventsToKeep = new Set<UserID>()
+		const eventsToKeep = new Set<EventRowID>()
+		if (this.meta.current.preview_event_rowid) {
+			eventsToKeep.add(this.meta.current.preview_event_rowid)
+			const previewEvt = this.eventsByRowID.get(this.meta.current.preview_event_rowid)
+			if (previewEvt) {
+				if (previewEvt.last_edit_rowid) {
+					eventsToKeep.add(previewEvt.last_edit_rowid)
+				}
+				memberEventsToKeep.add(previewEvt?.sender ?? "")
+			}
+		}
+		let targetVisibleCount = window.gcSettings.visibleTimelineLimit
+		const now = Date.now()
+		if (this.meta.current.sorting_timestamp + window.gcSettings.secondaryTimelineLimitSortingAge < now
+			&& this.lastOpened + window.gcSettings.secondaryTimelineLimitMinTimeSinceOpened < now) {
+			targetVisibleCount = window.gcSettings.secondaryTimelineLimit
+		}
+		const timelineLimit = window.gcSettings.timelineHardLimit
+		let timelineCutoff = Math.max(0, this.timeline.length - timelineLimit)
+		let visibleLength = 0
+		for (let i = this.timeline.length - 1; i > timelineCutoff; i--) {
+			const rowid = this.timeline[i].event_rowid
+			const evt = this.eventsByRowID.get(rowid)
+			if (!evt) {
+				timelineCutoff = i + 1
+				break
+			}
+			eventsToKeep.add(rowid)
+			memberEventsToKeep.add(evt.sender)
+			if (isVisibleEvent(evt)) {
+				visibleLength++
+				if (visibleLength >= targetVisibleCount) {
+					timelineCutoff = i
+					break
+				}
+			}
+		}
+		const newState = new Map<EventType, Map<string, EventRowID>>()
+		let deletedEvents = 0
+		let deletedState = 0
+		newState.set("m.room.member", new Map<string, EventRowID>(
+			this.state.get("m.room.member")?.entries().filter(([key, eventRowID]) => {
+				if (memberEventsToKeep.has(key)) {
+					eventsToKeep.add(eventRowID)
+					return true
+				} else {
+					deletedState++
+					return false
+				}
+			}) ?? [],
+		))
+		const emotes = this.state.get("im.ponies.room_emotes")
+		if (emotes) {
+			newState.set("im.ponies.room_emotes", emotes)
+			for (const rowid of emotes.values()) {
+				eventsToKeep.add(rowid)
+			}
+		}
+		this.state = newState
+		this.stateLoaded = false
+		this.fullMembersLoaded = false
+		this.#membersCache = null
+		this.#autocompleteMembersCache = null
+		this.paginationRequestedForRow = -1
+		this.timeline = this.timeline.slice(timelineCutoff, this.timeline.length)
+		this.notifyTimelineSubscribers()
+		for (const [rowID, evt] of this.eventsByRowID.entries()) {
+			if (!eventsToKeep.has(rowID)) {
+				this.eventsByRowID.delete(rowID)
+				this.eventsByID.delete(evt.event_id)
+				deletedEvents++
+			}
+		}
+		return [timelineCutoff, deletedEvents, deletedState] as const
 	}
 }
