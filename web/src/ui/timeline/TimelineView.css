@@ -1,5 +1,5 @@
 div.timeline-view {
-	padding: 1rem 0rem;
+	padding-block-start: 1rem;
 	overflow-y: scroll;
 
 	display: flex;

@@ -9,7 +9,6 @@ div.room-view {
 		"messageview" 1fr
 		"autocomplete" 0
 		"input" auto
-		"typing" auto
 		/ 1fr;
 	contain: strict;
 }

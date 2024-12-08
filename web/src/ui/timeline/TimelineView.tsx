@@ -19,6 +19,7 @@ import { useRoomTimeline } from "@/api/statestore"
 import { MemDBEvent } from "@/api/types"
 import useFocus from "@/util/focus.ts"
 import ClientContext from "../ClientContext.ts"
+import TypingNotifications from "../composer/TypingNotifications.tsx"
 import { useRoomContext } from "../roomview/roomcontext.ts"
 import TimelineEvent from "./TimelineEvent.tsx"
 import "./TimelineView.css"
@@ -134,7 +135,8 @@ const TimelineView = () => {
 				prevEvt = entry
 				return thisEvt
 			})}
-			<div className="timeline-bottom-ref" ref={bottomRef}/>
+			<div className="timeline-bottom-ref" ref={bottomRef} />
+			<TypingNotifications />
 		</div>
 	</div>
 }

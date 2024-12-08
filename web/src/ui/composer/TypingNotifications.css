@@ -1,11 +1,19 @@
 div.typing-notifications {
-	grid-area: typing;
-	height: 1.6rem;
-	margin: 0 1.6rem;
+	position: sticky;
+	bottom: 0;
+	min-block-size: 1.6rem;
+	padding-block: .25rem;
+	padding-inline: 1.6rem;
 	display: flex;
 	gap: 0.5rem;
 	align-items: center;
 	font-size: 0.9rem;
+	box-shadow: 0 0 1rem var(--background-color);
+
+	background-color: var(--background-color);
+	&.empty {
+		--background-color: transparent;
+	}
 
 	> div.avatars {
 		display: flex;

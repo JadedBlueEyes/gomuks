@@ -16,7 +16,6 @@
 import { JSX, useRef } from "react"
 import { RoomStateStore } from "@/api/statestore"
 import MessageComposer from "../composer/MessageComposer.tsx"
-import TypingNotifications from "../composer/TypingNotifications.tsx"
 import RightPanel, { RightPanelProps } from "../rightpanel/RightPanel.tsx"
 import TimelineView from "../timeline/TimelineView.tsx"
 import RoomViewHeader from "./RoomViewHeader.tsx"
@@ -39,7 +38,6 @@ const RoomView = ({ room, rightPanelResizeHandle, rightPanel }: RoomViewProps) =
 			<RoomViewHeader room={room}/>
 			<TimelineView/>
 			<MessageComposer/>
-			<TypingNotifications/>
 		</div>
 		{rightPanelResizeHandle}
 		{rightPanel && <RightPanel {...rightPanel}/>}
