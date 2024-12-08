@@ -10,9 +10,13 @@ div.typing-notifications {
 	font-size: 0.9rem;
 	box-shadow: 0 0 1rem var(--background-color);
 
+	transition: opacity 0.5s;
+
 	background-color: var(--background-color);
+	opacity: 1;
 	&.empty {
 		--background-color: transparent;
+		opacity: 0;
 	}
 
 	> div.avatars {
